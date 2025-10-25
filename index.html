@@ -1,1 +1,186 @@
-d
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>테스트 화면 (Track EZ)</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans KR', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f8f8f8;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            text-align: center;
+        }
+        .container {
+            padding: 40px;
+            background-color: #fff;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            font-size: 3em;
+            color: #4CAF50; /* 초록색 강조 */
+            margin-bottom: 10px;
+        }
+        p {
+            font-size: 1.2em;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>테스트 화면</h1>
+        <p>이 페이지는 접속 정보 수집 테스트를 위해 운영 중입니다. 잠시만 기다려 주세요.</p>
+        <p id="status-message" style="margin-top: 30px; color: #FF9800;">정보 수집 중...</p>
+    </div>
+
+    <!-- Firebase SDK (v9/v10 호환 모드) 로드: 버전 업데이트 -->
+    <script src="https://www.gstatic.com/firebasejs/10.10.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.10.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.10.0/firebase-firestore-compat.js"></script>
+    
+    <script>
+        // DOMContentLoaded: HTML 로드가 완료된 후 스크립트 실행
+        document.addEventListener('DOMContentLoaded', () => {
+            const statusElement = document.getElementById('status-message');
+            
+            // 사용자가 제공한 Firebase 설정
+            const firebaseConfig = {
+                apiKey: "AIzaSyB1ApaFJIQWlS6dj9SGiviHyCMwlvD1mcY",
+                authDomain: "track-ez-9ecb7.firebaseapp.com",
+                projectId: "track-ez-9ecb7",
+                storageBucket: "track-ez-9ecb7.firebasestorage.app",
+                messagingSenderId: "893851585207",
+                appId: "1:893851585207:web:ba248d9bcab0d793361b32",
+                measurementId: "G-E69E7TLNZN"
+            };
+
+            // Firebase 초기화 및 서비스 설정
+            let db, auth;
+            let appId = 'track-ez-9ecb7'; // Firestore 경로 구성을 위한 Project ID
+
+            try {
+                // 'firebase-app-compat.js' 로드 후 firebase.initializeApp 사용 가능
+                const app = firebase.initializeApp(firebaseConfig);
+                db = firebase.firestore();
+                auth = firebase.auth();
+                // Firestore Logging Level 설정 (디버깅용)
+                // db.settings({ logLevel: 'debug' });
+                statusElement.textContent = "정보 수집 중...";
+            } catch (initError) {
+                console.error("Firebase 초기화 오류:", initError);
+                statusElement.textContent = "오류 발생: Firebase 초기화에 실패했습니다. (콘솔 확인)";
+                statusElement.style.color = '#F44336';
+                return;
+            }
+            
+            // 접속 정보 기록 및 Firebase에 저장하는 메인 함수
+            async function logVisitor() {
+                let userId = 'anonymous'; // 초기값
+                
+                // 1. 익명 인증으로 사용자 ID 확보 (Firestore 규칙 준수를 위해 필수)
+                try {
+                    console.log("Auth object initialized:", !!auth); // 디버깅 로그 추가
+                    // 'firebase-auth-compat.js' 로드 후 auth.signInAnonymously 사용 가능
+                    await auth.signInAnonymously();
+                    userId = auth.currentUser.uid;
+                } catch (authError) {
+                    // 오류 발생 시 오류 메시지를 사용자에게 표시
+                    console.error("익명 인증 실패:", authError);
+                    
+                    // 익명 인증이 활성화되지 않았을 때 발생하는 특정 오류 진단
+                    if (authError.code === 'auth/configuration-not-found' || authError.code === 'auth/operation-not-allowed') {
+                         // Firebase Console 설정 오류에 대한 구체적인 안내
+                         statusElement.textContent = "인증 실패: Firebase Console에서 'Anonymous' 인증 제공업체를 활성화해야 합니다.";
+                         console.error("!!! FATAL: Please enable Anonymous Sign-in in your Firebase project console (Authentication > Sign-in Method).");
+                    } else {
+                        // 일반적인 오류 메시지
+                        statusElement.textContent = `오류 발생: 인증 실패. (코드: ${authError.code})`;
+                    }
+
+                    statusElement.style.color = '#F44336';
+                    return;
+                }
+
+                const userAgent = navigator.userAgent; 
+                let ip = 'N/A';
+                let country = 'Unknown';
+                let isp = 'Unknown';
+                let browser = 'Unknown';
+
+                // 브라우저 정보 추출
+                if (userAgent.includes('Chrome') && !userAgent.includes('Edg')) {
+                    browser = 'Chrome';
+                } else if (userAgent.includes('Firefox')) {
+                    browser = 'Firefox';
+                } else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) {
+                    browser = 'Safari';
+                } else if (userAgent.includes('Edg')) {
+                    browser = 'Edge';
+                } else if (userAgent.includes('MSIE') || userAgent.includes('Trident')) {
+                    browser = 'IE';
+                }
+                
+                // 2. IP 및 지리 정보 가져오기
+                try {
+                    // IP 주소 가져오기
+                    const ipResponse = await fetch('https://api.ipify.org?format=json');
+                    const ipData = await ipResponse.json();
+                    ip = ipData.ip;
+                    
+                    // IP를 기반으로 지리 정보 가져오기
+                    const geoResponse = await fetch(`https://ip-api.com/json/${ip}?fields=status,country,isp`);
+                    const geoData = await geoResponse.json();
+                    
+                    if (geoData.status === 'success') {
+                        country = geoData.country || 'Unknown';
+                        isp = geoData.isp || 'Unknown';
+                    }
+                } catch (error) {
+                    console.error("IP/Geo 정보 수집 실패:", error);
+                    ip = 'Fetch Failed';
+                    country = 'Fetch Failed';
+                    isp = 'Fetch Failed';
+                }
+
+                // 3. Firestore 경로 설정 및 데이터 구성
+                // Firestore 보안 규칙에 맞춰 /artifacts/{appId}/users/{userId}/visitor_logs 경로 사용
+                const logCollectionPath = `artifacts/${appId}/users/${userId}/visitor_logs`;
+                const logEntry = {
+                    timestamp: firebase.firestore.FieldValue.serverTimestamp(), // 서버 시간
+                    user_id: userId, // 익명 인증 UID
+                    user_agent: userAgent, // 기기명/OS/브라우저 정보
+                    browser: browser, // 추출된 브라우저
+                    ip_address: ip,
+                    location_country: country, // 국가
+                    isp_info: isp, // ISP (인터넷 서비스 제공업체)
+                };
+
+                // 4. Firestore에 데이터 추가
+                db.collection(logCollectionPath).add(logEntry)
+                    .then(() => {
+                        console.log("로그가 Firestore에 성공적으로 기록되었습니다. Path:", logCollectionPath);
+                        statusElement.textContent = `정보 수집 완료! (User ID: ${userId})`;
+                        statusElement.style.color = '#4CAF50';
+                    })
+                    .catch((error) => {
+                        console.error("Firestore 쓰기 오류: 보안 규칙을 확인하십시오. ", error);
+                        statusElement.textContent = "오류 발생: 로그 기록 실패 (보안 규칙 확인)";
+                        statusElement.style.color = '#F44336';
+                    });
+            }
+
+            // 페이지 로드 후 로그 함수 실행
+            logVisitor();
+        });
+    </script>
+</body>
+</html>
