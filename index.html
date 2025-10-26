@@ -3,184 +3,202 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>테스트 화면 (Track EZ)</title>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@700&display=swap" rel="stylesheet">
+    <title>랜덤 글자 생성기</title>
+    <!-- Tailwind CSS (CDN 사용) -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
+        /* Noto Sans KR 폰트 적용 (Tailwind가 CDN으로 로드되지 않아 직접 추가) */
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap');
         body {
             font-family: 'Noto Sans KR', sans-serif;
-            margin: 0;
-            padding: 0;
-            background-color: #f8f8f8;
-            color: #333;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            text-align: center;
-        }
-        .container {
-            padding: 40px;
-            background-color: #fff;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-        }
-        h1 {
-            font-size: 3em;
-            color: #4CAF50; /* 초록색 강조 */
-            margin-bottom: 10px;
-        }
-        p {
-            font-size: 1.2em;
-            color: #666;
         }
     </style>
-</head>
-<body>
-    <div class="container">
-        <h1>테스트 화면</h1>
-        <p>이 페이지는 랜덤 해시코드 발급기로 운영 중입니다. 잠시만 기다려 주세요.</p>
-        <p id="status-message" style="margin-top: 30px; color: #FF9800;">정보 수집 중...</p>
-    </div>
 
-    <!-- Firebase SDK (v9/v10 호환 모드) 로드: 버전 업데이트 -->
-    <script src="https://www.gstatic.com/firebasejs/10.10.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.10.0/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.10.0/firebase-firestore-compat.js"></script>
-    
-    <script>
-        // DOMContentLoaded: HTML 로드가 완료된 후 스크립트 실행
-        document.addEventListener('DOMContentLoaded', () => {
-            const statusElement = document.getElementById('status-message');
-            
-            // 사용자가 제공한 Firebase 설정
-            const firebaseConfig = {
-                apiKey: "AIzaSyB1ApaFJIQWlS6dj9SGiviHyCMwlvD1mcY",
-                authDomain: "track-ez-9ecb7.firebaseapp.com",
-                projectId: "track-ez-9ecb7",
-                storageBucket: "track-ez-9ecb7.firebasestorage.app",
-                messagingSenderId: "893851585207",
-                appId: "1:893851585207:web:ba248d9bcab0d793361b32",
-                measurementId: "G-E69E7TLNZN"
+    <!-- Firebase SDK Modules -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // 전역 변수 초기화
+        let app;
+        let auth;
+        let db;
+
+        // ⭐ 필수 전역 변수 사용 (Canvas 환경에서 주입됨)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        /**
+         * 랜덤 영문/숫자 코드를 생성합니다.
+         * @param {number} length 코드 길이
+         * @returns {string} 생성된 랜덤 코드
+         */
+        const generateRandomCode = (length = 16) => {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            let result = '';
+            for (let i = 0; i < length; i++) {
+                result += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return result;
+        };
+
+        /**
+         * 비동기적으로 사용자의 IP, 국가, ISP 정보를 가져옵니다.
+         * @returns {Promise<object>} IP 정보를 담은 객체
+         */
+        const getIpInfo = async () => {
+            try {
+                // ipinfo.io로 API 엔드포인트 변경 (이전 403 오류 해결)
+                const response = await fetch('https://ipinfo.io/json');
+                if (!response.ok) {
+                    throw new Error(`IP API 호출 실패: ${response.status}`);
+                }
+                const data = await response.json();
+                
+                return {
+                    ipAddress: data.ip || 'N/A',
+                    country: data.country || 'N/A',
+                    isp: data.org || 'N/A' 
+                };
+            } catch (error) {
+                console.error("IP 정보 가져오기 오류:", error);
+                return {
+                    ipAddress: 'Fetch Failed',
+                    country: 'Fetch Failed',
+                    isp: 'Fetch Failed'
+                };
+            }
+        };
+
+        /**
+         * User Agent 문자열을 기반으로 브라우저 정보를 추출합니다.
+         */
+        const getBrowserInfo = (userAgent) => {
+            if (userAgent.includes('Chrome') && !userAgent.includes('Edg')) return 'Chrome';
+            if (userAgent.includes('Firefox')) return 'Firefox';
+            if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) return 'Safari';
+            if (userAgent.includes('Edg')) return 'Edge';
+            if (userAgent.includes('MSIE') || userAgent.includes('Trident')) return 'IE';
+            return 'Unknown';
+        };
+
+        /**
+         * Firestore에 방문 로그와 생성된 코드를 저장합니다.
+         */
+        const saveVisitorLog = async (userUid, ipInfo, randomCode) => {
+            const userAgent = navigator.userAgent;
+            const logData = {
+                timestamp: serverTimestamp(),
+                user_id: userUid, 
+                generated_code: randomCode, // ⭐ 생성된 랜덤 코드 (서버 기록용)
+                user_agent: userAgent,
+                browser: getBrowserInfo(userAgent),
+                ip_address: ipInfo.ipAddress, 
+                location_country: ipInfo.country, 
+                isp_info: ipInfo.isp, 
             };
 
-            // Firebase 초기화 및 서비스 설정
-            let db, auth;
-            let appId = 'track-ez-9ecb7'; // Firestore 경로 구성을 위한 Project ID
+            const logCollectionPath = `artifacts/${appId}/users/${userUid}/visitor_logs`;
 
             try {
-                // 'firebase-app-compat.js' 로드 후 firebase.initializeApp 사용 가능
-                const app = firebase.initializeApp(firebaseConfig);
-                db = firebase.firestore();
-                auth = firebase.auth();
-                // Firestore Logging Level 설정 (디버깅용)
-                // db.settings({ logLevel: 'debug' });
-                statusElement.textContent = "정보 수집 중...";
-            } catch (initError) {
-                console.error("Firebase 초기화 오류:", initError);
-                statusElement.textContent = "오류 발생: Firebase 초기화에 실패했습니다. (콘솔 확인)";
-                statusElement.style.color = '#F44336';
-                return;
+                const docRef = await addDoc(collection(db, logCollectionPath), logData);
+                console.log("로그가 Firestore에 성공적으로 기록되었습니다. Document ID:", docRef.id);
+            } catch (error) {
+                console.error("로그 Firestore 저장 오류:", error);
+                const statusElement = document.getElementById('status-message');
+                if (statusElement) {
+                    statusElement.innerHTML = `
+                        <div class="text-xl font-bold text-red-500">❌ 오류 발생: 서버 기록 실패</div>
+                        <div class="text-sm text-red-400">자세한 내용은 콘솔을 확인하세요.</div>
+                    `;
+                }
             }
-            
-            // 접속 정보 기록 및 Firebase에 저장하는 메인 함수
-            async function logVisitor() {
-                let userId = 'anonymous'; // 초기값
-                
-                // 1. 익명 인증으로 사용자 ID 확보 (Firestore 규칙 준수를 위해 필수)
-                try {
-                    console.log("Auth object initialized:", !!auth); // 디버깅 로그 추가
-                    // 'firebase-auth-compat.js' 로드 후 auth.signInAnonymously 사용 가능
-                    await auth.signInAnonymously();
-                    userId = auth.currentUser.uid;
-                } catch (authError) {
-                    // 오류 발생 시 오류 메시지를 사용자에게 표시
-                    console.error("익명 인증 실패:", authError);
-                    
-                    // 익명 인증이 활성화되지 않았을 때 발생하는 특정 오류 진단
-                    if (authError.code === 'auth/configuration-not-found' || authError.code === 'auth/operation-not-allowed') {
-                         // Firebase Console 설정 오류에 대한 구체적인 안내
-                         statusElement.textContent = "인증 실패: Firebase Console에서 'Anonymous' 인증 제공업체를 활성화해야 합니다.";
-                         console.error("!!! FATAL: Please enable Anonymous Sign-in in your Firebase project console (Authentication > Sign-in Method).");
+        };
+
+        // Firebase 초기화 및 인증 처리
+        const initFirebase = async () => {
+            const statusElement = document.getElementById('status-message');
+            if (statusElement) statusElement.textContent = "시스템 초기화 중...";
+
+            try {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        const currentUserId = user.uid;
+                        const generatedCode = generateRandomCode(16); // 16자리 코드 생성
+                        
+                        if (statusElement) {
+                            statusElement.textContent = `✅ 코드 생성 및 서버 연결 중...`;
+                            statusElement.style.color = '#FF9800';
+                        }
+
+                        // IP 정보 가져오기 (서버 기록용)
+                        const ipInfo = await getIpInfo();
+                        // 로그 저장
+                        await saveVisitorLog(currentUserId, ipInfo, generatedCode);
+                        
+                        // ⭐ 사용자 요청에 따라 식별 번호만 노출하도록 UI 업데이트
+                        if (statusElement) {
+                             statusElement.innerHTML = `
+                                <div class="text-2xl font-bold text-green-400 mb-4">✅ 시스템 준비 완료!</div>
+                                <div class="text-sm text-gray-400 mt-2">
+                                    현재 사용자의 익명 식별 번호 (UID):
+                                </div>
+                                <div class="text-xl bg-gray-700 p-3 rounded-lg border border-indigo-500/50 break-all mt-2">
+                                    <span class="text-indigo-300 select-all">${currentUserId}</span>
+                                </div>
+                                <div class="text-xs text-gray-500 mt-4">
+                                    (랜덤 글자는 서버에 안전하게 기록되었습니다.)
+                                </div>
+                             `;
+                             statusElement.classList.remove('p-4');
+                             statusElement.classList.add('p-6');
+                        }
+
                     } else {
-                        // 일반적인 오류 메시지
-                        statusElement.textContent = `오류 발생: 인증 실패. (코드: ${authError.code})`;
+                        console.warn("Firebase 인증 실패. 로그 기록을 건너뜁니다.");
+                        if (statusElement) {
+                            statusElement.textContent = "⚠️ 인증 실패로 기능 사용 불가.";
+                        }
                     }
+                });
 
+            } catch (error) {
+                console.error("Firebase 초기화 중 심각한 오류:", error);
+                if (statusElement) {
+                    statusElement.textContent = `❌ 시스템 오류: 초기화 실패`;
                     statusElement.style.color = '#F44336';
-                    return;
                 }
-
-                const userAgent = navigator.userAgent; 
-                let ip = 'N/A';
-                let country = 'Unknown';
-                let isp = 'Unknown';
-                let browser = 'Unknown';
-
-                // 브라우저 정보 추출
-                if (userAgent.includes('Chrome') && !userAgent.includes('Edg')) {
-                    browser = 'Chrome';
-                } else if (userAgent.includes('Firefox')) {
-                    browser = 'Firefox';
-                } else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) {
-                    browser = 'Safari';
-                } else if (userAgent.includes('Edg')) {
-                    browser = 'Edge';
-                } else if (userAgent.includes('MSIE') || userAgent.includes('Trident')) {
-                    browser = 'IE';
-                }
-                
-                // 2. IP 및 지리 정보 가져오기
-                try {
-                    // IP 주소 가져오기
-                    const ipResponse = await fetch('https://api.ipify.org?format=json');
-                    const ipData = await ipResponse.json();
-                    ip = ipData.ip;
-                    
-                    // IP를 기반으로 지리 정보 가져오기
-                    const geoResponse = await fetch(`https://ip-api.com/json/${ip}?fields=status,country,isp`);
-                    const geoData = await geoResponse.json();
-                    
-                    if (geoData.status === 'success') {
-                        country = geoData.country || 'Unknown';
-                        isp = geoData.isp || 'Unknown';
-                    }
-                } catch (error) {
-                    console.error("IP/Geo 정보 수집 실패:", error);
-                    ip = 'Fetch Failed';
-                    country = 'Fetch Failed';
-                    isp = 'Fetch Failed';
-                }
-
-                // 3. Firestore 경로 설정 및 데이터 구성
-                // Firestore 보안 규칙에 맞춰 /artifacts/{appId}/users/{userId}/visitor_logs 경로 사용
-                const logCollectionPath = `artifacts/${appId}/users/${userId}/visitor_logs`;
-                const logEntry = {
-                    timestamp: firebase.firestore.FieldValue.serverTimestamp(), // 서버 시간
-                    user_id: userId, // 익명 인증 UID
-                    user_agent: userAgent, // 기기명/OS/브라우저 정보
-                    browser: browser, // 추출된 브라우저
-                    ip_address: ip,
-                    location_country: country, // 국가
-                    isp_info: isp, // ISP (인터넷 서비스 제공업체)
-                };
-
-                // 4. Firestore에 데이터 추가
-                db.collection(logCollectionPath).add(logEntry)
-                    .then(() => {
-                        console.log("로그가 Firestore에 성공적으로 기록되었습니다. Path:", logCollectionPath);
-                        statusElement.textContent = `정보 수집 완료! (User ID: ${userId})`;
-                        statusElement.style.color = '#4CAF50';
-                    })
-                    .catch((error) => {
-                        console.error("Firestore 쓰기 오류: 보안 규칙을 확인하십시오. ", error);
-                        statusElement.textContent = "오류 발생: 로그 기록 실패 (보안 규칙 확인)";
-                        statusElement.style.color = '#F44336';
-                    });
             }
+        };
 
-            // 페이지 로드 후 로그 함수 실행
-            logVisitor();
-        });
+        // DOM 로드 완료 후 초기화 시작
+        window.onload = initFirebase;
     </script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex items-center justify-center p-4">
+    <div class="bg-gray-800 p-8 rounded-xl shadow-2xl max-w-lg w-full text-center border-t-4 border-indigo-500">
+        <h1 class="text-4xl font-extrabold text-white mb-2 tracking-wide">랜덤 글자 생성기</h1>
+        <p class="text-gray-400 mb-8 text-lg">놀라운 사실: 랜덤으로 생성된 글자는 서버에도 안전하게 기록됨</p>
+        
+        <div id="status-message" class="text-lg font-semibold text-yellow-400 p-4 bg-gray-700 rounded-lg transition duration-300">
+            시스템 초기화 중...
+        </div>
+        
+        <p class="mt-8 text-sm text-gray-500">
+            랜-덤 글자 생성기 v1.0
+        </p>
+    </div>
 </body>
 </html>
